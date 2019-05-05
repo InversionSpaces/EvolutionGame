@@ -9,8 +9,12 @@
 #include <utility>
 #include <algorithm>
 #include <random>
+#include <map>
 
 const sf::Vector2<int> moves[] = {{0, 1}, {1, 1}, {1, 0}, {1, -1}, {0, -1}, {-1, -1}, {-1, 0}};
+
+std::random_device dev;
+std::mt19937 gen(dev());
 
 class Object;
 class Living;
@@ -18,13 +22,15 @@ class Posion;
 
 class World;
 
+class AgrInterface;
+template<typename T>
+class Agregator;
+
 class Object {
-    friend class World;
-private:
+public:
     sf::Vector2<int> position;
-protected:
     sf::Color color;
-public: 
+ 
     Object(sf::Vector2<int> position);
 
     virtual bool react(World* world, Living* acter);
@@ -56,17 +62,33 @@ public:
     ~Poison();
 };
 
+class Wall : public Object {
+public:
+	Wall(sf::Vector2<int> position);
+
+	bool react(World* world, Living* acter);
+
+	~Wall();
+};
+
+class Healing : public Object {
+public:
+	Healing(sf::Vector2<int> position);
+
+	bool react(World* world, Living* acter);
+
+	~Healing();
+};
+
 class World {
 private:
-    std::vector<Object*> objects;
-    std::vector<Living*> livings;
-
-    sf::Vector2<int> size;
+    std::map<std::string, AgrInterface*> agregators;
 public:
+	sf::Vector2<int> size;
+
     World(sf::Vector2<int> size);
 
     void remove(Object* object);
-    void remove(Living* living);
 
     void move(Living* living, sf::Vector2<int> newpos);
 
@@ -79,6 +101,72 @@ public:
     ~World();
 };
 
+class AgrInterface {
+public:
+	virtual void iterate(World* world) = 0;
+	virtual bool remove(Object* object) = 0;
+	virtual bool checkPos(sf::Vector2<int> pos) = 0;
+	virtual Object* getOnPos(sf::Vector2<int> pos) = 0;
+	virtual std::vector<Object*> getObjects() = 0;
+};
+
+template<typename objT>
+class Agregator : public AgrInterface {
+private:
+	int minimum, maximum;
+	std::vector<objT*> objects;
+public:
+	Agregator(int minimum, int maximum) :
+	minimum(minimum),
+	maximum(maximum) { }
+
+	void iterate(World* world) {
+		if(objects.size() <= minimum) {
+			std::uniform_int_distribution<int> xdist(0, world->size.x - 1);
+    		std::uniform_int_distribution<int> ydist(0, world->size.y - 1);
+
+			for(int i = objects.size(); i < maximum; i++) {
+		        sf::Vector2<int> newpos = {xdist(gen), ydist(gen)};
+		        while(world->checkPos(newpos))
+		            newpos = {xdist(gen), ydist(gen)};
+		        objects.push_back(new objT(newpos));
+			}
+		}
+	}
+
+	Object* getOnPos(sf::Vector2<int> pos) {
+		return *std::find_if(objects.begin(), objects.end(), 
+	           [pos] (objT* o) { return o->position == pos; });
+	}
+
+	bool remove(Object* object) {
+		auto it = std::find(objects.begin(), objects.end(), object);
+	    if (it != objects.end()){
+	        delete (*it);
+	        objects.erase(it);
+	        return true;
+	    }
+	    return false;
+	}
+
+	bool checkPos(sf::Vector2<int> pos) {
+		return 	(std::find_if(objects.begin(), objects.end(), 
+	            [pos] (objT* o) { return o->position == pos; }) 
+				!= objects.end());
+	}
+
+	std::vector<Object*> getObjects() {
+		std::vector<Object*> retval(objects.size());
+		for(int i = 0; i < objects.size(); i++)
+			retval[i] = (Object*)objects[i];
+		return retval;
+	}
+
+	~Agregator() {
+		for(auto o: objects)
+			delete o;
+	}
+};
 
 Object::Object(sf::Vector2<int> position) : 
     position(position) { }
@@ -89,14 +177,9 @@ bool Object::react(World* world, Living* acter) {
 
 Object::~Object() { }
 
-
-
-std::random_device dev;
-std::mt19937 gen(dev());
-
 Living::Living(sf::Vector2<int> position) : 
     Object(position),
-    health(100),
+    health(20),
     codePos(0) {
     color = sf::Color::Blue;
 
@@ -136,62 +219,70 @@ Poison::Poison(sf::Vector2<int> position) :
 bool Poison::react(World* world, Living* acter) {
     acter->health -= 5;
 
-    world->remove(this);
     if(acter->health <= 0)
         world->remove(acter);
+    world->remove(this);
 
-    return false;
+    return true;
 }
 
 Poison::~Poison() { }
 
+Wall::Wall(sf::Vector2<int> position) :
+	Object(position) {
+	color = sf::Color::White;
+}
+
+bool Wall::react(World* world, Living* acter) {
+	return false;
+}
+
+Wall::~Wall() { }
+
+Healing::Healing(sf::Vector2<int> position) :
+	Object(position) {
+	color = sf::Color::Green;
+}
+
+bool Healing::react(World* world, Living* acter) {
+	acter->health += 5;
+
+	world->remove(this);
+
+	return true;
+}
+
+Healing::~Healing() { }
+
 
 World::World(sf::Vector2<int> size) : size(size) {
-    std::uniform_int_distribution<int> xdist(0, size.x);
-    std::uniform_int_distribution<int> ydist(0, size.y);
-
-    for(int i = 0; i < 8; i++){
-        sf::Vector2<int> newpos = {xdist(gen), ydist(gen)};
-        while(checkPos(newpos))
-            newpos = {xdist(gen), ydist(gen)};
-        livings.push_back(new Living(newpos));
-    }
+    agregators["living"] = new Agregator<Living>(4, 8);
+    agregators["posion"] = new Agregator<Poison>(5, 10);
+    agregators["healing"] = new Agregator<Healing>(5, 10);
+    agregators["wall"] = new Agregator<Wall>(10, 10);
 }
 
 bool World::checkPos(sf::Vector2<int> pos){
-    return (std::find_if(livings.begin(), livings.end(), 
-            [pos] (Living* l) { 
-                    return l->position == pos;
-                }) != livings.end()) || 
-            (std::find_if(objects.begin(), objects.end(), 
-            [pos] (Object* o) { 
-                    return o->position == pos;
-                }) != objects.end());
+    for(auto agr: agregators) 
+    	if(agr.second->checkPos(pos)) 
+    		return true;
+    return false;
 }
 
 
 void World::remove(Object* object){
-    auto it = std::find(objects.begin(), objects.end(), object);
-    if (it != objects.end()){
-        delete (*it);
-        objects.erase(it);
-    }
-}
-
-
-void World::remove(Living* living){
-    auto it = std::find(livings.begin(), livings.end(), living);
-    if (it != livings.end()){
-        delete (*it);
-        livings.erase(it);
-    }
+    for(auto agr: agregators) 
+    	if(agr.second->remove(object)) 
+    		break;
 }
 
 
 void World::iterate(){
-    for(int i = 0; i < livings.size(); i++){
-        livings[i]->act(this);
-    }
+	for(auto agr: agregators)
+		agr.second->iterate(this);
+
+	for(Object* living: agregators["living"]->getObjects()) 
+		((Living*)living)->act(this);
 }
 
 void World::move(Living* living, sf::Vector2<int> newpos){
@@ -200,46 +291,34 @@ void World::move(Living* living, sf::Vector2<int> newpos){
     newpos.x = ((std::abs(newpos.x) / size.x + 1) * size.x + newpos.x) % size.x;
     newpos.y = ((std::abs(newpos.y) / size.y + 1) * size.y + newpos.y) % size.y;
 
-    auto ito = std::find_if(objects.begin(), objects.end(), [newpos] (Object* obj) { return obj->position == newpos; });
-    if(ito != objects.end()){
-        if((*ito)->react(this, living)) {
-            living->position = newpos;
-        }
-        return;
-    }
-
-    auto itl = std::find_if(livings.begin(), livings.end(), [newpos] (Living* liv) { return liv->position == newpos; });
-    if(itl != livings.end()){
-        if((*itl)->react(this, living)){
-            living->position = newpos;
-        }
-        return;
-    }
+    for(auto agr: agregators)
+    	if(agr.second->checkPos(newpos)) {
+    		if(!agr.second->getOnPos(newpos)->react(this, living))
+    			return;
+    		break;
+    	}
 
     living->position = newpos;
 }
 
 std::vector<std::pair<sf::Vector2<int>, sf::Color> > World::getDrawable(){
-    std::vector<std::pair<sf::Vector2<int>, sf::Color> > retval(objects.size() + livings.size());
-    for(int i = 0; i < objects.size(); i++)
-        retval[i] = std::make_pair(objects[i]->position, objects[i]->color);
-    for(int i = 0; i < livings.size(); i++)
-        retval[i + objects.size()] = std::make_pair(livings[i]->position, livings[i]->color);
-    return retval;
+	std::vector<std::pair<sf::Vector2<int>, sf::Color> > retval(0);
+	for(auto agr: agregators)
+		for(auto obj: agr.second->getObjects())
+			retval.push_back(std::make_pair(obj->position, obj->color));
+	return retval;
 }
 
 World::~World() {
-    for(int i = 0; i < livings.size(); i++)
-        delete livings[i];
-    for(int i = 0; i < objects.size(); i++)
-        delete objects[i];
+    for(auto agr: agregators)
+    	delete agr.second;
 }
 
 int main()
 {
     sf::Vector2<int> size = {20, 20};
     const int scale = 25;
-    const int delay = 100;
+    const int delay = 1000;
 
     World w(size);
 
