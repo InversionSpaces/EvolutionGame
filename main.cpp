@@ -23,7 +23,7 @@ class Posion;
 class World {
 public:
     int iteration, generation;
-    std::vector<Object*> objects;
+    std::vector<std::vector<Object*> > objects;
     std::map<std::string, int> counter;
     sf::Vector2<int> size;
 
@@ -79,19 +79,21 @@ public:
 class Living : public Object {
 public:
     int generation;
+
     int health;
+
     std::vector<int> code;
     int codePos;
 
     Living(sf::Vector2<int> position) :
         Object(position),
-        health(50),
+        health(150),
         codePos(0),
         generation(0) {
         type = "living";
         color = sf::Color::Blue;
 
-        std::uniform_int_distribution<int> sdist(10, 100);
+        std::uniform_int_distribution<int> sdist(10, 50);
         std::uniform_int_distribution<int> cdist(0, 7);
 
         for(int i = 0; i < sdist(gen); i++)
@@ -149,7 +151,7 @@ public:
     }
 
     bool react(World* world, Living* acter) {
-        acter->health -= 5;
+        acter->health -= 150;
         world->remove(this);
         return true;
     }
@@ -181,7 +183,7 @@ public:
     }
 
 	bool react(World* world, Living* acter) {
-        acter->health += 5;
+        acter->health += 100;
         world->remove(this);
         return true;
     }
@@ -194,6 +196,10 @@ World::World(sf::Vector2<int> size) :
     size(size),
     iteration(0),
     generation(0) {
+    	objects.resize(size.x);
+    	for(auto& col: objects)
+    		col.assign(size.y, 0);
+
         randomSpawn<Living>(40);
         randomSpawn<Wall>(1000);
         randomSpawn<Healing>(200);
@@ -212,41 +218,34 @@ sf::Vector2<int> World::randomPos() {
     std::uniform_int_distribution<int> ydist(0, size.y - 1);
 
     sf::Vector2<int> pos = {xdist(gen), ydist(gen)};
-    while(checkPos(pos))
+    while(objects[pos.x][pos.y])
         pos = {xdist(gen), ydist(gen)};
+
     return pos;
 }
 
 void World::add(Object* object) {
     counter[object->getType()]++;
-    objects.push_back(object);
+    objects[object->position.x][object->position.y] = object;
 }
 
 void World::remove(Object* object) {
     counter[object->getType()]--;
-    auto it = std::find(objects.begin(), objects.end(), object);
-    delete (*it);
-    objects.erase(it);
+    Object* removing = objects[object->position.x][object->position.y];
+    objects[object->position.x][object->position.y] = 0;
+    delete removing;
 }
 
 void World::move(Living* living, sf::Vector2<int> newpos) {
     newpos.x = ((std::abs(newpos.x) / size.x + 1) * size.x + newpos.x) % size.x;
     newpos.y = ((std::abs(newpos.y) / size.y + 1) * size.y + newpos.y) % size.y;
 
-    for(int i = 0; i < objects.size(); i++)
-        if(objects[i]->position == newpos){
-            if(objects[i]->react(this, living))
-                living->position = newpos;
-            return;
-        }
-
-    living->position = newpos;
-}
-
-bool World::checkPos(sf::Vector2<int> pos) {
-    return  std::find_if(objects.begin(), objects.end(), 
-            [pos] (Object* o) { return o->position == pos; })
-            != objects.end();
+    Object* reacter = objects[newpos.x][newpos.y];
+    if(!reacter || reacter->react(this, living)) {
+    	objects[newpos.x][newpos.y] = living;
+    	objects[living->position.x][living->position.y] = 0;
+    	living->position = newpos;
+    }
 }
 
 int World::getCount(std::string type) {
@@ -254,63 +253,77 @@ int World::getCount(std::string type) {
 }
 
 void World::iterate() {
-    for(int i = 0; i < objects.size(); i++) 
-        if(objects[i]->getType() == "living")
-            ((Living*)objects[i])->act(this);
+    for(int x = 0; x < size.x; x++)
+    	for(int y = 0; y < size.y; y++)
+	        if(objects[x][y] && objects[x][y]->getType() == "living")
+	            ((Living*)objects[x][y])->act(this);
 
     if(getCount("living") <= 20) {
         generation++;
 
         std::vector<Object*> tmp;
-        for(int i = 0; i < objects.size(); i++) {
-            if(objects[i]->getType() == "living")
-                tmp.push_back(objects[i]);
-        }
-        for(int i = 0; i < tmp.size(); i++) {
+        for(int x = 0; x < size.x; x++)
+    		for(int y = 0; y < size.y; y++) 
+	            if(objects[x][y] && objects[x][y]->getType() == "living")
+	                tmp.push_back(objects[x][y]);
+
+        for(int i = 0; i < tmp.size(); i++)
             add(new Living(randomPos(), (Living*)tmp[i], generation));
-        }
     }
 
-    if(getCount("poison") <= 100)
-        randomSpawn<Poison>(100);
+    if(getCount("poison") <= 200)
+        randomSpawn<Poison>(10);
 
-    if(getCount("healing") <= 100)
-        randomSpawn<Healing>(100);
+    if(getCount("healing") <= 200)
+        randomSpawn<Healing>(10);
 
     iteration++;
 }
 
 std::vector<std::pair<sf::Vector2<int>, sf::Color> > World::getDrawable(){
-    std::vector<std::pair<sf::Vector2<int>, sf::Color> > retval(objects.size());
-    for(int i = 0; i < objects.size(); i++)
-        retval[i] = std::make_pair(objects[i]->position, objects[i]->color);
+    std::vector<std::pair<sf::Vector2<int>, sf::Color> > retval;
+    for(int x = 0; x < size.x; x++)
+    	for(int y = 0; y < size.y; y++)
+    		if(objects[x][y])
+        		retval.push_back(
+        			std::make_pair(	objects[x][y]->position, 
+        							objects[x][y]->color )
+        			);
     return retval;
 }
 
 void World::printStat() {
-    std::cout<<"--------------"<<std::endl;
+    std::cout<<"#################################"<<std::endl;
     std::cout<<"Iteration "<<iteration<<std::endl;
     std::cout<<"Generation "<<generation<<std::endl;
-    for(int i = 0; i < objects.size(); i++) {
-        if(objects[i]->getType() == "living"){
-            Living* l = (Living*)objects[i];
-            std::cout<<"Living of Generation "<<l->generation
-            <<" with "<<l->health<<" hp"<<std::endl;
-        }
-    }
-    std::cout<<"--------------"<<std::endl;
+
+    for(int x = 0; x < size.x; x++)
+		for(int y = 0; y < size.y; y++) 
+            if(objects[x][y] && objects[x][y]->getType() == "living") {
+        		Living* l = (Living*)objects[x][y];
+        		std::cout<<"Living of Generation "<<l->generation
+        		<<" with "<<l->health<<" hp"<<std::endl;
+        		std::cout<<"Code: "<<std::endl;
+        		for(int j = 0; j < l->code.size(); j++)
+        			std::cout<<l->code[j]<<';';
+        		std::cout<<std::endl;
+            }
+
+    std::cout<<"#################################"<<std::endl;
 }
 
 World::~World() {
-    for(int i = 0; i < objects.size(); i++)
-        delete objects[i];
+    for(int x = 0; x < size.x; x++)
+		for(int y = 0; y < size.y; y++)
+			if(objects[x][y])
+				delete objects[x][y];
 }
 
 int main()
 {
     sf::Vector2<int> size = {120, 90};
     const int scale = 10;
-    int delay = 1000;
+    int delay = 10;
 
     World w(size);
 
@@ -329,11 +342,11 @@ int main()
                     w.printStat();
                 }
                 if (event.key.code == sf::Keyboard::Left) {
-                    delay = std::max(delay - 100, 0);
+                    delay = std::max(delay - 20, 0);
                     std::cout<<"Delay "<<delay<<std::endl;
                 }
                 if (event.key.code == sf::Keyboard::Right) {
-                    delay += 100;
+                    delay += 20;
                     std::cout<<"Delay "<<delay<<std::endl;
                 }
 
